@@ -1,0 +1,22 @@
+[Connection]
+# Broker name (e.g., FundedNext)
+broker = FundedNext
+
+# Broker server (e.g., fundednext server 2)
+server = fundednext server 2
+
+# Trading platform (currently only mt5 is supported)
+platform = mt5
+
+# Account number
+account = 12345678
+
+# Password (optional, will prompt if not provided)
+# password = your_password_here
+
+[Logging]
+# Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+level = INFO
+
+# Log file path (optional)
+# file = logs/copy_trade.log 
