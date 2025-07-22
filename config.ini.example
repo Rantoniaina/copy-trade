@@ -1,17 +1,34 @@
 [Connection]
-# Broker name (e.g., FundedNext)
+# Default broker name (e.g., FundedNext)
 broker = FundedNext
 
-# Broker server (e.g., FundedNext-Server 2)
+# Default broker server (e.g., FundedNext-Server 2)
 server = FundedNext-Server 2
 
 # Trading platform (currently only MT5 is supported)
 platform = MT5
 
-# Account number
+# Multiple accounts configuration
+# Each account should have a unique identifier (account1, account2, etc.)
+# All accounts will use the same broker and server specified above
+
+[Account1]
+# Account number for the first account
 account = 
 
-# Password (optional, will prompt if not provided)
+# Password for the first account
+# password = 
+
+[Account2]
+# Account number for the second account
+account = 
+
+# Password for the second account
+# password = 
+
+# Add more accounts as needed by creating additional sections
+# [Account3]
+# account = 
 # password = 
 
 [Logging]

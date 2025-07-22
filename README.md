@@ -1,11 +1,12 @@
 # Copy Trade
 
-A Python application for automated copy trading using MetaTrader 5 (MT5). This application connects to trading accounts headlessly and provides the foundation for implementing copy trading strategies.
+A Python application for automated copy trading using MetaTrader 5 (MT5). This application connects to trading accounts headlessly and provides the foundation for implementing copy trading strategies. **Now supports multiple broker connections simultaneously!**
 
 ## Features
 
 - ✅ **Headless MT5 Connection** - Connects to MetaTrader 5 without opening the GUI
 - ✅ **Multi-Broker Support** - Currently supports FundedNext with easy extensibility
+- ✅ **Multiple Account Connections** - Connect to multiple accounts with the same broker/server
 - ✅ **Configuration-Based** - All connection settings via config files
 - ✅ **Robust Error Handling** - Comprehensive logging and error management
 - ✅ **Account Management** - Real-time account information and balance monitoring
@@ -15,7 +16,7 @@ A Python application for automated copy trading using MetaTrader 5 (MT5). This a
 
 - **Python 3.8+**
 - **MetaTrader 5** installed and configured
-- **Trading account** with API access enabled
+- **Trading account(s)** with API access enabled
 - **Algorithm trading enabled** in MT5 settings
 
 ## Installation
@@ -40,6 +41,8 @@ A Python application for automated copy trading using MetaTrader 5 (MT5). This a
 
 ## Configuration
 
+### Multiple Accounts (Recommended)
+
 1. **Copy the example configuration:**
    ```bash
    cp config.ini.example config.ini
@@ -48,46 +51,81 @@ A Python application for automated copy trading using MetaTrader 5 (MT5). This a
 2. **Edit `config.ini` with your account details:**
    ```ini
    [Connection]
+   # All accounts will use the same broker and server
    broker = FundedNext
    server = FundedNext-Server 2
    platform = MT5
-   account = YOUR_ACCOUNT_NUMBER
-   password = YOUR_PASSWORD
+
+   [Account1]
+   account = YOUR_FIRST_ACCOUNT_NUMBER
+   password = YOUR_FIRST_PASSWORD
+
+   [Account2]
+   account = YOUR_SECOND_ACCOUNT_NUMBER
+   password = YOUR_SECOND_PASSWORD
+
+   # Add more accounts as needed
+   [Account3]
+   account = YOUR_THIRD_ACCOUNT_NUMBER
+   # password =  # Will prompt if not provided
 
    [Logging]
    level = INFO
-   # file = logs/copy_trade.log
    ```
+
+### Single Account (Legacy Mode)
+
+For backward compatibility, you can still use the old single account configuration:
+
+```ini
+[Connection]
+broker = FundedNext
+server = FundedNext-Server 2
+platform = MT5
+account = YOUR_ACCOUNT_NUMBER
+password = YOUR_PASSWORD
+```
 
 ## Usage
 
-### Basic Connection Test
+### Multiple Accounts
 
 ```bash
-python main.py --config config.ini
-```
-
-### Command Line Options
-
-```bash
-# Use configuration file
+# Connect to multiple accounts using config file
 python main.py --config config.ini
 
-# Override with command line arguments
-python main.py --broker FundedNext --server "FundedNext-Server 2" --account 123456
-
-# Enable verbose logging
+# Enable verbose logging for debugging
 python main.py --config config.ini --verbose
 ```
 
-### Example Output
+### Single Account (Legacy)
+
+```bash
+# Use configuration file (legacy format)
+python main.py --config config.ini
+
+# Command line arguments
+python main.py --broker FundedNext --server "FundedNext-Server 2" --account 123456
+
+# No config file (will prompt for details)
+python main.py
+```
+
+### Example Output - Multiple Accounts
 
 ```
-2025-07-22 16:05:49 - INFO - Attempting to connect to FundedNext (FundedNext-Server 2) account 13662820
-2025-07-22 16:06:07 - INFO - Successfully connected to account 13662820
-2025-07-22 16:06:07 - INFO - Connected to account 13662820 on server FundedNext-Server 2
-2025-07-22 16:06:07 - INFO - Balance: 15100.45 USD
-2025-07-22 16:06:07 - INFO - Connection established. Press Ctrl+C to disconnect and exit.
+2025-01-XX XX:XX:XX - INFO - Connecting to account1 (account 12345678)...
+2025-01-XX XX:XX:XX - INFO - [account1] Attempting to connect to FundedNext (FundedNext-Server 2) account 12345678
+2025-01-XX XX:XX:XX - INFO - [account1] Successfully connected to account 12345678
+2025-01-XX XX:XX:XX - INFO - Added connection account1 successfully
+2025-01-XX XX:XX:XX - INFO - Connecting to account2 (account 87654321)...
+2025-01-XX XX:XX:XX - INFO - [account2] Attempting to connect to FundedNext (FundedNext-Server 2) account 87654321
+2025-01-XX XX:XX:XX - INFO - [account2] Successfully connected to account 87654321
+2025-01-XX XX:XX:XX - INFO - Added connection account2 successfully
+2025-01-XX XX:XX:XX - INFO - Successfully connected to 2 out of 2 accounts
+2025-01-XX XX:XX:XX - INFO - [account1] Account 12345678 on FundedNext-Server 2 - Balance: 15100.45 USD
+2025-01-XX XX:XX:XX - INFO - [account2] Account 87654321 on FundedNext-Server 2 - Balance: 25250.78 USD
+2025-01-XX XX:XX:XX - INFO - All connections established. Press Ctrl+C to disconnect and exit.
 ```
 
 ## Project Structure
@@ -95,12 +133,44 @@ python main.py --config config.ini --verbose
 ```
 copy-trade/
 ├── src/
-│   └── broker_connection.py    # Core MT5 connection logic
-├── main.py                     # Application entry point
-├── config.ini.example          # Configuration template
-├── requirements.txt            # Python dependencies
-├── DEVELOPMENT.md             # Development notes and roadmap
-└── README.md                  # This file
+│   ├── broker_connection.py       # Core MT5 connection logic + MultiBrokerManager
+│   └── example.py                 # Example usage (single account)
+├── main.py                        # Application entry point (supports multiple accounts)
+├── config.ini.example             # Configuration template (multiple accounts)
+├── requirements.txt               # Python dependencies
+├── DEVELOPMENT.md                 # Development notes and roadmap
+└── README.md                      # This file
+```
+
+## Multiple Account Management
+
+### MultiBrokerManager Class
+
+The `MultiBrokerManager` class provides:
+
+- **Thread-safe operations** for managing multiple connections
+- **Connection tracking** with unique identifiers
+- **Bulk operations** for connecting/disconnecting all accounts
+- **Account monitoring** with real-time status updates
+- **Error isolation** - one failing connection doesn't affect others
+
+### Key Methods
+
+```python
+# Create manager
+manager = MultiBrokerManager()
+
+# Add connections
+manager.add_connection("account1", broker, server, platform, account_num, password)
+
+# Get specific connection
+conn = manager.get_connection("account1")
+
+# Get all connected accounts info
+accounts = manager.get_connected_accounts()
+
+# Disconnect all
+manager.disconnect_all()
 ```
 
 ## Supported Brokers
@@ -120,46 +190,65 @@ copy-trade/
    - Account information retrieval
    - Clean connection lifecycle management
 
-2. **Configuration System**
-   - INI-based configuration
+2. **Multiple Account Support**
+   - Simultaneous connections to multiple accounts
+   - Same broker/server with different credentials
+   - Thread-safe connection management
+   - Individual connection monitoring
+
+3. **Configuration System**
+   - INI-based configuration for multiple accounts
    - Command-line argument support
+   - Backward compatibility with single account mode
    - Flexible server name mapping
 
-3. **Logging & Monitoring**
-   - Comprehensive logging system
+4. **Logging & Monitoring**
+   - Comprehensive logging system with connection IDs
    - Real-time account balance monitoring
-   - Connection status tracking
+   - Connection status tracking for all accounts
 
 ### 🚧 In Progress
 
 1. **Copy Trading Engine**
-   - Trade monitoring and replication
-   - Position management
+   - Trade monitoring and replication between accounts
+   - Position management across multiple accounts
    - Risk management rules
-
-2. **Multi-Account Support**
-   - Source account monitoring
-   - Multiple destination accounts
-   - Proportional scaling
 
 ### 📋 Planned Features
 
-1. **Advanced Risk Management**
+1. **Advanced Copy Trading**
+   - Master-slave account designation
+   - Proportional scaling based on account size
+   - Selective trade copying with filters
+
+2. **Advanced Risk Management**
    - Stop-loss and take-profit rules
-   - Maximum drawdown limits
+   - Maximum drawdown limits per account
    - Position sizing algorithms
 
-2. **Web Interface**
-   - Real-time monitoring dashboard
+3. **Web Interface**
+   - Real-time monitoring dashboard for all accounts
    - Configuration management
    - Trade history and analytics
 
-3. **Notifications**
-   - Email/SMS alerts
+4. **Notifications**
+   - Email/SMS alerts for all accounts
    - Trade execution notifications
    - Error and status updates
 
 ## Troubleshooting
+
+### Multiple Account Issues
+
+1. **Some Accounts Fail to Connect**
+   - Check individual account credentials
+   - Verify all accounts use the same broker/server
+   - Review logs for specific error messages per account
+
+2. **MT5 Resource Limits**
+   - MT5 may limit concurrent connections
+   - Consider connecting accounts sequentially if needed
+   - Monitor system resources (CPU, memory)
 
 ### Common Issues
 
@@ -180,8 +269,8 @@ copy-trade/
 
 ### Getting Help
 
-1. Check the logs for detailed error messages
-2. Verify MT5 settings and account status
+1. Check the logs for detailed error messages (includes connection IDs)
+2. Verify MT5 settings and account status for all accounts
 3. Test manual login to MT5 first
 4. Review the troubleshooting section in DEVELOPMENT.md
 

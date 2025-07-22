@@ -34,8 +34,67 @@ python main.py --broker FundedNext --server "fundednext server 2" --platform mt5
 python main.py --config config.ini
 ```
 
+### 2. ✅ Handle connection to multiple brokers
+
+**Implemented**: Extended the application to support multiple broker connections simultaneously with the same broker and server but different account credentials.
+
+**New Features:**
+
+- `MultiBrokerManager` class for managing multiple connections
+- Thread-safe connection management with unique identifiers
+- Updated configuration format supporting multiple accounts
+- Enhanced logging with connection-specific prefixes
+- Backward compatibility with single account mode
+
+**Key Components:**
+
+- `MultiBrokerManager`: Core class for managing multiple connections
+- Updated `config.ini.example`: Shows multiple account configuration
+- Enhanced `main.py`: Supports both single and multiple account modes
+- `src/multi_account_example.py`: Interactive example for testing
+
+**Configuration Example:**
+
+```ini
+[Connection]
+broker = FundedNext
+server = FundedNext-Server 2
+platform = MT5
+
+[Account1]
+account = 12345678
+password = password1
+
+[Account2] 
+account = 87654321
+password = password2
+```
+
+**Usage:**
+
+```bash
+# Multiple accounts from config
+python main.py --config config.ini
+
+# Interactive multiple account example
+python src/multi_account_example.py
+
+# Single account (legacy mode)
+python main.py --account 12345678
+```
+
+**Features:**
+- Simultaneous connections to multiple accounts
+- Same broker/server with different credentials
+- Connection tracking and monitoring
+- Individual account balance reporting
+- Thread-safe operations
+- Error isolation (one failed connection doesn't affect others)
+
 ### Next Steps
 
-2. Implement trade copying functionality between accounts
-3. Add monitoring and notification features
-4. Create a user interface for easier management
+3. Implement trade copying functionality between accounts
+4. Add master-slave account designation
+5. Implement proportional scaling based on account sizes
+6. Add monitoring and notification features
+7. Create a user interface for easier management
