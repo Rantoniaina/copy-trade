@@ -25,25 +25,12 @@ class BrokerConnection:
     Class to manage connections to trading accounts via MetaTrader 5.
     """
     
-    # Known broker servers
-    BROKER_SERVERS = {
-        "FundedNext": {
-            "fundednext server 2": "FundedNext-Live2"
-        }
-    }
-    
     def __init__(self):
         """Initialize the BrokerConnection instance."""
         self.connected = False
         self.account_info = None
+        # Note: We'll initialize MT5 when connecting, not in constructor
         
-        # Initialize MT5 if not already initialized
-        if not mt5.initialize():
-            logger.error(f"MetaTrader5 initialization failed. Error code: {mt5.last_error()}")
-            raise RuntimeError(f"MetaTrader5 initialization failed: {mt5.last_error()}")
-        else:
-            logger.info("MetaTrader5 initialized successfully")
-    
     def __del__(self):
         """Clean up resources when object is destroyed."""
         self.disconnect()
@@ -59,7 +46,7 @@ class BrokerConnection:
         
         Args:
             broker: Broker name (e.g., "FundedNext")
-            broker_server: Broker server name (e.g., "fundednext server 2")
+            broker_server: Broker server name (e.g., "FundedNext-Server 2")
             platform: Trading platform (currently only "mt5" is supported)
             account_number: Trading account number
             password: Trading account password
@@ -74,25 +61,36 @@ class BrokerConnection:
         # Disconnect from any existing connection
         self.disconnect()
         
-        # Resolve server name
-        server = self._resolve_server(broker, broker_server)
-        if not server:
-            logger.error(f"Unknown broker/server combination: {broker}/{broker_server}")
-            return False
+        # Use the server name directly from config
+        server = broker_server.strip()
         
-        # Login to the account
+        # Initialize MT5 with login credentials directly (headless mode)
         logger.info(f"Attempting to connect to {broker} ({server}) account {account_number}")
-        login_result = mt5.login(account_number, password=password, server=server)
         
-        if not login_result:
+        # Try to initialize with credentials directly - this should avoid the GUI
+        if not mt5.initialize(login=account_number, password=password, server=server):
             error_code = mt5.last_error()
-            logger.error(f"Connection failed. Error code: {error_code}")
-            return False
+            logger.error(f"MT5 initialization with credentials failed. Error: {error_code}")
+            
+            # Fallback: try regular initialize then login
+            logger.info("Trying fallback initialization method...")
+            if not mt5.initialize():
+                error_code = mt5.last_error()
+                logger.error(f"MT5 initialization failed. Error: {error_code}")
+                return False
+            
+            # Now try to login
+            if not mt5.login(account_number, password=password, server=server):
+                error_code = mt5.last_error()
+                logger.error(f"Login failed. Error: {error_code}")
+                mt5.shutdown()
+                return False
         
         # Store account information
         self.account_info = mt5.account_info()
         if not self.account_info:
             logger.error("Failed to get account info")
+            mt5.shutdown()
             return False
         
         self.connected = True
@@ -129,28 +127,4 @@ class BrokerConnection:
             return None
         
         # Convert named tuple to dictionary
-        return self.account_info._asdict()
-    
-    def _resolve_server(self, broker: str, broker_server: str) -> Optional[str]:
-        """
-        Resolve broker and server name to the actual server address.
-        
-        Args:
-            broker: Broker name
-            broker_server: Broker server name
-            
-        Returns:
-            str: Resolved server address or None if not found
-        """
-        broker = broker.strip()
-        broker_server = broker_server.strip().lower()
-        
-        if broker not in self.BROKER_SERVERS:
-            logger.error(f"Unknown broker: {broker}")
-            return None
-        
-        if broker_server not in self.BROKER_SERVERS[broker]:
-            logger.error(f"Unknown server for broker {broker}: {broker_server}")
-            return None
-        
-        return self.BROKER_SERVERS[broker][broker_server] 
+        return self.account_info._asdict() 

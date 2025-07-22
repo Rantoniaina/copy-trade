@@ -2,17 +2,17 @@
 # Broker name (e.g., FundedNext)
 broker = FundedNext
 
-# Broker server (e.g., fundednext server 2)
-server = fundednext server 2
+# Broker server (e.g., FundedNext-Server 2)
+server = FundedNext-Server 2
 
-# Trading platform (currently only mt5 is supported)
-platform = mt5
+# Trading platform (currently only MT5 is supported)
+platform = MT5
 
 # Account number
-account = 12345678
+account = 
 
 # Password (optional, will prompt if not provided)
-# password = your_password_here
+# password = 
 
 [Logging]
 # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
