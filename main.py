@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Copy Trade - Main application entry point
+Copy Trade - Multi-Process Main Application Entry Point
+Uses separate processes for master monitoring and slave execution.
+Automatically manages MT5 instances.
 """
 import os
 import sys
@@ -8,26 +10,30 @@ import argparse
 import logging
 import configparser
 from getpass import getpass
+from typing import Dict, List
 
-from src.broker_connection import BrokerConnection, MultiBrokerManager
+from src.multiprocess_copy_trading import CopyTradingOrchestrator
+from src.mt5_instance_manager import auto_setup_mt5_instances, get_mt5_path_for_role
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - [MAIN-%(process)d] - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Copy Trade - MT5 Multiple Trading Account Connection")
-    parser.add_argument("--broker", default="FundedNext", help="Broker name (default: FundedNext)")
-    parser.add_argument("--server", default="fundednext server 2", help="Broker server (default: fundednext server 2)")
-    parser.add_argument("--platform", default="mt5", help="Trading platform (default: mt5)")
-    parser.add_argument("--account", type=int, help="Single account number (legacy mode)")
-    parser.add_argument("--config", help="Path to config file for multiple accounts")
+    parser = argparse.ArgumentParser(description="Copy Trade - Multi-Process MT5 Master/Slave Trading")
+    parser.add_argument("--config", required=True, help="Path to config file for accounts")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+    parser.add_argument("--signal-broker", choices=['file', 'queue'], default='file', 
+                       help="Signal broker type (default: file)")
+    parser.add_argument("--auto-setup-mt5", action="store_true", default=True,
+                       help="Automatically setup MT5 instances (default: true)")
+    parser.add_argument("--no-auto-setup-mt5", dest="auto_setup_mt5", action="store_false",
+                       help="Disable automatic MT5 instance setup")
     
     return parser.parse_args()
 
@@ -47,17 +53,18 @@ def load_config(config_path):
         return None
 
 
-def load_multiple_accounts_from_config(config):
+def load_accounts_from_config(config):
     """
-    Load multiple account configurations from config file.
+    Load account configurations from config file.
     
     Args:
         config: ConfigParser object
         
     Returns:
-        List of tuples (connection_id, account_number, password)
+        Tuple of (master_account, slave_accounts)
     """
-    accounts = []
+    master_account = None
+    slave_accounts = []
     
     # Look for Account sections (Account1, Account2, etc.)
     for section_name in config.sections():
@@ -80,82 +87,92 @@ def load_multiple_accounts_from_config(config):
             if not password:
                 password = getpass(f"Password for {section_name} (account {account_number}): ")
             
-            accounts.append((section_name.lower(), account_number, password))
+            # Get role
+            role_str = section.get('role', 'slave').strip().lower()
+            
+            # Get volume scale for slaves
+            volume_scale = float(section.get('volume_scale', '1.0'))
+            
+            # Get custom MT5 path if specified
+            mt5_path = section.get('mt5_path', '').strip() or None
+            
+            if role_str == 'master':
+                if master_account is not None:
+                    logger.error(f"Multiple master accounts found. Only one master allowed.")
+                    return None, []
+                
+                master_account = {
+                    'account_number': account_number,
+                    'password': password,
+                    'mt5_path': mt5_path
+                }
+                logger.info(f"Master account configured: {account_number}")
+                
+            elif role_str == 'slave':
+                slave_accounts.append({
+                    'account_number': account_number,
+                    'password': password,
+                    'volume_scale': volume_scale,
+                    'mt5_path': mt5_path
+                })
+                logger.info(f"Slave account configured: {account_number} (scale: {volume_scale}x)")
+                
+            else:
+                logger.error(f"Invalid role '{role_str}' in {section_name}. Must be 'master' or 'slave'")
+                continue
     
-    return accounts
+    return master_account, slave_accounts
 
 
-def connect_single_account():
-    """Connect to a single account (legacy mode)."""
-    args = parse_args()
+def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = True) -> Dict[str, str]:
+    """Setup MT5 instances automatically if enabled."""
+    mt5_paths = {}
     
-    # Load configuration from file if specified
-    config = None
-    if args.config:
-        config = load_config(args.config)
-    
-    # Get connection parameters
-    broker = args.broker
-    broker_server = args.server
-    platform = args.platform
-    account_number = args.account
-    
-    # If config is available, use it to override command line arguments
-    if config and 'Connection' in config:
-        conn_config = config['Connection']
-        broker = conn_config.get('broker', broker)
-        broker_server = conn_config.get('server', broker_server)
-        platform = conn_config.get('platform', platform)
-    
-    # If account number is still not provided, prompt for it
-    if not account_number:
+    if auto_setup:
         try:
-            account_number = int(input("Account number: "))
-        except ValueError:
-            logger.error("Account number must be an integer")
-            return 1
+            logger.info("🔧 Setting up MT5 instances automatically...")
+            mt5_paths = auto_setup_mt5_instances(master_count, slave_count)
+            
+            if mt5_paths:
+                logger.info("✅ MT5 instances ready:")
+                for role, path in mt5_paths.items():
+                    logger.info(f"  {role}: {path}")
+            else:
+                logger.warning("⚠️ No MT5 instances created - will use default installation")
+                
+        except Exception as e:
+            logger.error(f"❌ Failed to setup MT5 instances automatically: {e}")
+            logger.info("Continuing with default MT5 installation...")
+    else:
+        logger.info("MT5 instance auto-setup disabled")
     
-    # Get password
-    password = getpass("Password: ")
+    return mt5_paths
+
+
+def assign_mt5_paths(master_account: Dict, slave_accounts: List[Dict], mt5_paths: Dict[str, str]) -> None:
+    """Assign MT5 paths to accounts if not already specified."""
     
-    # Create broker connection
-    try:
-        broker_conn = BrokerConnection()
-    except RuntimeError as e:
-        logger.error(f"Failed to initialize MetaTrader5: {e}")
-        return 1
+    # Assign master path if not specified
+    if not master_account.get('mt5_path') and mt5_paths:
+        master_path = mt5_paths.get('master') or mt5_paths.get('master1')
+        if master_path:
+            master_account['mt5_path'] = master_path
+            logger.info(f"Assigned master MT5 path: {master_path}")
     
-    # Connect to the account
-    connected = broker_conn.connect(
-        broker=broker,
-        broker_server=broker_server,
-        platform=platform,
-        account_number=account_number,
-        password=password
-    )
-    
-    if not connected:
-        logger.error("Failed to connect to the trading account")
-        return 1
-    
-    # Display account information
-    account_info = broker_conn.get_account_info()
-    if account_info:
-        logger.info(f"Connected to account {account_info['login']} on server {account_info['server']}")
-        logger.info(f"Balance: {account_info['balance']} {account_info['currency']}")
-    
-    # Keep the connection alive until user interrupts
-    try:
-        logger.info("Connection established. Press Ctrl+C to disconnect and exit.")
-        while broker_conn.is_connected():
-            import time
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("User interrupted. Disconnecting...")
-    finally:
-        broker_conn.disconnect()
-    
-    return 0
+    # Assign slave paths if not specified
+    slave_index = 1
+    for slave in slave_accounts:
+        if not slave.get('mt5_path') and mt5_paths:
+            if len(slave_accounts) == 1:
+                slave_path = mt5_paths.get('slave') or mt5_paths.get('slave1')
+            else:
+                slave_path = mt5_paths.get(f'slave{slave_index}') or mt5_paths.get('slave')
+            
+            if slave_path:
+                slave['mt5_path'] = slave_path
+                logger.info(f"Assigned slave {slave_index} MT5 path: {slave_path}")
+        
+        slave_index += 1
 
 
 def main():
@@ -166,23 +183,14 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # If config file is not provided or single account mode, use legacy mode
-    if not args.config:
-        logger.info("No config file provided. Using single account mode.")
-        return connect_single_account()
+    logger.info("🚀 STARTING MULTI-PROCESS COPY TRADING SYSTEM with AUTO MT5 SETUP")
     
     # Load configuration
     config = load_config(args.config)
     if not config:
         return 1
     
-    # Check if this is a multiple account configuration
-    account_sections = [s for s in config.sections() if s.startswith('Account')]
-    if not account_sections:
-        logger.info("No Account sections found in config. Using single account mode.")
-        return connect_single_account()
-    
-    # Get default broker settings
+    # Get broker settings
     if 'Connection' not in config:
         logger.error("Missing [Connection] section in config file")
         return 1
@@ -192,60 +200,104 @@ def main():
     broker_server = conn_config.get('server', 'FundedNext-Server 2')
     platform = conn_config.get('platform', 'MT5')
     
-    # Load multiple accounts from config
-    accounts = load_multiple_accounts_from_config(config)
-    if not accounts:
-        logger.error("No valid accounts found in configuration")
+    # Get copy trade settings
+    check_interval = 1.0
+    if 'CopyTrade' in config:
+        copy_config = config['CopyTrade']
+        check_interval = copy_config.getfloat('check_interval', 1.0)
+    
+    # Load accounts
+    master_account, slave_accounts = load_accounts_from_config(config)
+    
+    if master_account is None:
+        logger.error("No master account found. Please set one account with role=master")
         return 1
     
-    # Create multi-broker manager
-    manager = MultiBrokerManager()
+    if len(slave_accounts) == 0:
+        logger.error("No slave accounts found. Please set at least one account with role=slave")
+        return 1
     
-    # Connect to all accounts
-    connected_count = 0
-    for connection_id, account_number, password in accounts:
-        logger.info(f"Connecting to {connection_id} (account {account_number})...")
-        
-        success = manager.add_connection(
-            connection_id=connection_id,
-            broker=broker,
-            broker_server=broker_server,
-            platform=platform,
-            account_number=account_number,
-            password=password
+    logger.info(f"Configuration loaded: 1 master, {len(slave_accounts)} slaves")
+    
+    # Setup MT5 instances automatically
+    mt5_paths = setup_mt5_instances(
+        master_count=1, 
+        slave_count=len(slave_accounts), 
+        auto_setup=args.auto_setup_mt5
+    )
+    
+    # Assign MT5 paths to accounts
+    assign_mt5_paths(master_account, slave_accounts, mt5_paths)
+    
+    # Create orchestrator
+    orchestrator = CopyTradingOrchestrator(signal_broker_type=args.signal_broker)
+    
+    # Configure orchestrator
+    orchestrator.configure(
+        broker=broker,
+        broker_server=broker_server,
+        platform=platform,
+        check_interval=check_interval
+    )
+    
+    # Add slave accounts FIRST (consistent with process startup order)
+    for i, slave in enumerate(slave_accounts):
+        success = orchestrator.add_slave_account(
+            account_number=slave['account_number'],
+            password=slave['password'],
+            volume_scale=slave['volume_scale'],
+            mt5_path=slave.get('mt5_path')
         )
-        
-        if success:
-            connected_count += 1
-        else:
-            logger.error(f"Failed to connect to {connection_id}")
+        if not success:
+            logger.error(f"Failed to add slave account {slave['account_number']}")
+            return 1
     
-    if connected_count == 0:
-        logger.error("Failed to connect to any accounts")
+    # Add master account LAST (consistent with process startup order)
+    success = orchestrator.add_master_account(
+        account_number=master_account['account_number'],
+        password=master_account['password'],
+        mt5_path=master_account.get('mt5_path')
+    )
+    if not success:
+        logger.error("Failed to add master account")
         return 1
     
-    # Display information about all connected accounts
-    logger.info(f"Successfully connected to {connected_count} out of {len(accounts)} accounts")
+    # Start copy trading system
+    if not orchestrator.start_copy_trading():
+        logger.error("Failed to start copy trading system")
+        return 1
     
-    connected_accounts = manager.get_connected_accounts()
-    for account in connected_accounts:
-        logger.info(f"[{account['connection_id']}] Account {account['login']} on {account['server']} - Balance: {account['balance']} {account['currency']}")
+    # Display status
+    status = orchestrator.get_status()
+    logger.info(f"System Status: Master={status['master_running']}, Slaves={status['slaves_running']}/{status['total_slaves']}")
     
-    # TODO: Add copy trade functionality here
+    # Display MT5 instance information
+    logger.info("🔧 MT5 Instance Information:")
+    logger.info(f"  Master: {master_account.get('mt5_path', 'Default installation')}")
+    for i, slave in enumerate(slave_accounts):
+        logger.info(f"  Slave {i+1}: {slave.get('mt5_path', 'Default installation')}")
     
-    # Keep connections alive until user interrupts
+    # Wait for interruption and handle shutdown
     try:
-        logger.info("All connections established. Press Ctrl+C to disconnect and exit.")
-        while manager.is_any_connected():
-            import time
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("User interrupted. Disconnecting all accounts...")
-    finally:
-        manager.disconnect_all()
+        orchestrator.wait_for_interruption()
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        orchestrator.stop_copy_trading()
+        return 1
     
+    # Cleanup
+    orchestrator.cleanup_signal_files()
+    
+    logger.info("🏁 COPY TRADING SYSTEM SHUTDOWN COMPLETE")
     return 0
 
 
 if __name__ == "__main__":
+    # Set multiprocessing start method for Windows compatibility
+    import multiprocessing
+    try:
+        multiprocessing.set_start_method('spawn')
+    except RuntimeError:
+        pass  # Already set
+    
     sys.exit(main()) 

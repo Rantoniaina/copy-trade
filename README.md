@@ -1,16 +1,18 @@
 # Copy Trade
 
-A Python application for automated copy trading using MetaTrader 5 (MT5). This application connects to trading accounts headlessly and provides the foundation for implementing copy trading strategies. **Now supports multiple broker connections simultaneously!**
+A Python application for automated copy trading using MetaTrader 5 (MT5). This application connects to trading accounts headlessly and implements **master/slave copy trading** functionality. **Now with full copy trading support!**
 
 ## Features
 
 - ✅ **Headless MT5 Connection** - Connects to MetaTrader 5 without opening the GUI
 - ✅ **Multi-Broker Support** - Currently supports FundedNext with easy extensibility
+- ✅ **Master/Slave Copy Trading** - Automatically copy trades from master to slave accounts
 - ✅ **Multiple Account Connections** - Connect to multiple accounts with the same broker/server
-- ✅ **Configuration-Based** - All connection settings via config files
+- ✅ **Real-time Trade Monitoring** - Monitor master account for new trades with configurable intervals
+- ✅ **Configuration-Based** - All connection settings and roles via config files
 - ✅ **Robust Error Handling** - Comprehensive logging and error management
 - ✅ **Account Management** - Real-time account information and balance monitoring
-- 🚧 **Copy Trading Logic** - Foundation ready, implementation in progress
+- ✅ **Thread-safe Operations** - Safe concurrent management of multiple connections
 
 ## Prerequisites
 
@@ -41,14 +43,14 @@ A Python application for automated copy trading using MetaTrader 5 (MT5). This a
 
 ## Configuration
 
-### Multiple Accounts (Recommended)
+### Master/Slave Copy Trading (Recommended)
 
 1. **Copy the example configuration:**
    ```bash
    cp config.ini.example config.ini
    ```
 
-2. **Edit `config.ini` with your account details:**
+2. **Edit `config.ini` with your master and slave account details:**
    ```ini
    [Connection]
    # All accounts will use the same broker and server
@@ -56,22 +58,38 @@ A Python application for automated copy trading using MetaTrader 5 (MT5). This a
    server = FundedNext-Server 2
    platform = MT5
 
+   [CopyTrade]
+   # Enable copy trading functionality
+   enabled = true
+   # Time interval between trade checks (in seconds)
+   check_interval = 1.0
+
    [Account1]
-   account = YOUR_FIRST_ACCOUNT_NUMBER
-   password = YOUR_FIRST_PASSWORD
+   account = YOUR_MASTER_ACCOUNT_NUMBER
+   password = YOUR_MASTER_PASSWORD
+   role = master  # This account will be monitored for trades
 
    [Account2]
-   account = YOUR_SECOND_ACCOUNT_NUMBER
-   password = YOUR_SECOND_PASSWORD
+   account = YOUR_FIRST_SLAVE_ACCOUNT_NUMBER
+   password = YOUR_FIRST_SLAVE_PASSWORD
+   role = slave   # Trades will be copied to this account
 
-   # Add more accounts as needed
    [Account3]
-   account = YOUR_THIRD_ACCOUNT_NUMBER
+   account = YOUR_SECOND_SLAVE_ACCOUNT_NUMBER
+   password = YOUR_SECOND_SLAVE_PASSWORD
+   role = slave   # Trades will be copied to this account
+
+   # Add more slave accounts as needed
    # password =  # Will prompt if not provided
 
    [Logging]
    level = INFO
    ```
+
+   **Important Notes:**
+   - You must have **exactly one** master account (`role = master`)
+   - You must have **at least one** slave account (`role = slave`) 
+   - All accounts must use the same broker and server
 
 ### Single Account (Legacy Mode)
 
@@ -88,14 +106,20 @@ password = YOUR_PASSWORD
 
 ## Usage
 
-### Multiple Accounts
+### Master/Slave Copy Trading
 
 ```bash
-# Connect to multiple accounts using config file
+# Start copy trading with master/slave accounts
 python main.py --config config.ini
 
 # Enable verbose logging for debugging
 python main.py --config config.ini --verbose
+
+# Connect to accounts without starting copy trading
+python main.py --config config.ini --no-copy
+
+# Interactive copy trading example
+python src/copy_trade_example.py
 ```
 
 ### Single Account (Legacy)
@@ -111,21 +135,23 @@ python main.py --broker FundedNext --server "FundedNext-Server 2" --account 1234
 python main.py
 ```
 
-### Example Output - Multiple Accounts
+### Example Output - Copy Trading
 
 ```
-2025-01-XX XX:XX:XX - INFO - Connecting to account1 (account 12345678)...
-2025-01-XX XX:XX:XX - INFO - [account1] Attempting to connect to FundedNext (FundedNext-Server 2) account 12345678
-2025-01-XX XX:XX:XX - INFO - [account1] Successfully connected to account 12345678
-2025-01-XX XX:XX:XX - INFO - Added connection account1 successfully
-2025-01-XX XX:XX:XX - INFO - Connecting to account2 (account 87654321)...
-2025-01-XX XX:XX:XX - INFO - [account2] Attempting to connect to FundedNext (FundedNext-Server 2) account 87654321
-2025-01-XX XX:XX:XX - INFO - [account2] Successfully connected to account 87654321
-2025-01-XX XX:XX:XX - INFO - Added connection account2 successfully
+2025-01-XX XX:XX:XX - INFO - Copy trading configuration: 1 master, 2 slaves
+2025-01-XX XX:XX:XX - INFO - Connecting to account1 (master) (account 12345678)...
+2025-01-XX XX:XX:XX - INFO - [account1] (master) Attempting to connect to FundedNext (FundedNext-Server 2) account 12345678
+2025-01-XX XX:XX:XX - INFO - [account1] (master) Successfully connected to account 12345678
+2025-01-XX XX:XX:XX - INFO - Added MASTER connection account1 successfully
+2025-01-XX XX:XX:XX - INFO - Connecting to account2 (slave) (account 87654321)...
+2025-01-XX XX:XX:XX - INFO - [account2] (slave) Successfully connected to account 87654321
+2025-01-XX XX:XX:XX - INFO - Added SLAVE connection account2 successfully
 2025-01-XX XX:XX:XX - INFO - Successfully connected to 2 out of 2 accounts
-2025-01-XX XX:XX:XX - INFO - [account1] Account 12345678 on FundedNext-Server 2 - Balance: 15100.45 USD
-2025-01-XX XX:XX:XX - INFO - [account2] Account 87654321 on FundedNext-Server 2 - Balance: 25250.78 USD
-2025-01-XX XX:XX:XX - INFO - All connections established. Press Ctrl+C to disconnect and exit.
+2025-01-XX XX:XX:XX - INFO - [account1] (MASTER) Account 12345678 on FundedNext-Server 2 - Balance: 15100.45 USD
+2025-01-XX XX:XX:XX - INFO - [account2] (SLAVE) Account 87654321 on FundedNext-Server 2 - Balance: 25250.78 USD
+2025-01-XX XX:XX:XX - INFO - Copy trade engine started monitoring
+2025-01-XX XX:XX:XX - INFO - Copy trading started with 1.0s check interval
+2025-01-XX XX:XX:XX - INFO - Copy trading active. Press Ctrl+C to stop and disconnect.
 ```
 
 ## Project Structure
@@ -133,44 +159,53 @@ python main.py
 ```
 copy-trade/
 ├── src/
-│   ├── broker_connection.py       # Core MT5 connection logic + MultiBrokerManager
-│   └── example.py                 # Example usage (single account)
-├── main.py                        # Application entry point (supports multiple accounts)
-├── config.ini.example             # Configuration template (multiple accounts)
+│   ├── broker_connection.py       # Core MT5 connection management
+│   ├── signal_broker.py           # Inter-process communication for trade signals
+│   ├── master_monitor.py          # Master account monitoring process
+│   ├── slave_executor.py          # Slave account trade execution process
+│   ├── multiprocess_copy_trading.py # Multi-process orchestrator
+│   └── mt5_instance_manager.py    # MT5 instance management (optional)
+├── main.py                        # Application entry point (multi-process copy trading)
+├── config.ini.example             # Configuration template (master/slave setup)
 ├── requirements.txt               # Python dependencies
 ├── DEVELOPMENT.md                 # Development notes and roadmap
 └── README.md                      # This file
 ```
 
-## Multiple Account Management
+## Multi-Process Copy Trading Architecture
 
-### MultiBrokerManager Class
+### Core Components
 
-The `MultiBrokerManager` class provides:
+The system uses a **multi-process architecture** to overcome MT5's single-connection limitation:
 
-- **Thread-safe operations** for managing multiple connections
-- **Connection tracking** with unique identifiers
-- **Bulk operations** for connecting/disconnecting all accounts
-- **Account monitoring** with real-time status updates
-- **Error isolation** - one failing connection doesn't affect others
+- **Master Monitor Process** - Dedicated process for monitoring master account trades
+- **Slave Executor Processes** - Separate processes for each slave account execution
+- **Signal Broker** - Inter-process communication for trade signals (file-based or queue-based)
+- **Copy Trading Orchestrator** - Manages and coordinates all processes
 
-### Key Methods
+### Key Features
 
-```python
-# Create manager
-manager = MultiBrokerManager()
+- **True Isolation** - Each account runs in its own process with dedicated MT5 connection
+- **Slaves-First Connection** - Slaves connect first, then master starts monitoring
+- **AutoTrading Detection** - Automatic detection and warnings for disabled AutoTrading
+- **Symbol Management** - Automatic symbol selection for market data access
+- **Volume Scaling** - Configurable volume scaling for slave accounts
+- **Graceful Shutdown** - Clean termination of all processes
 
-# Add connections
-manager.add_connection("account1", broker, server, platform, account_num, password)
+### Usage
 
-# Get specific connection
-conn = manager.get_connection("account1")
+```bash
+# Start multi-process copy trading
+python main.py --config config.ini
 
-# Get all connected accounts info
-accounts = manager.get_connected_accounts()
+# Enable automatic MT5 instance setup (creates separate MT5 installations)
+python main.py --config config.ini --auto-setup-mt5
 
-# Disconnect all
-manager.disconnect_all()
+# Use queue-based signal broker instead of files
+python main.py --config config.ini --signal-broker queue
+
+# Enable verbose logging
+python main.py --config config.ini --verbose
 ```
 
 ## Supported Brokers
@@ -184,57 +219,67 @@ manager.disconnect_all()
 
 ### ✅ Completed Features
 
-1. **MT5 Connection Management**
-   - Headless initialization with credentials
-   - Robust error handling and retry logic
-   - Account information retrieval
-   - Clean connection lifecycle management
+1. **Multi-Process Copy Trading**
+   - Dedicated processes for master monitoring and slave execution
+   - True MT5 connection isolation per account
+   - Inter-process communication via signal broker
+   - Slaves-first connection coordination
 
-2. **Multiple Account Support**
-   - Simultaneous connections to multiple accounts
-   - Same broker/server with different credentials
-   - Thread-safe connection management
-   - Individual connection monitoring
+2. **Real-Time Trade Detection**
+   - Market orders (open/close) detection and copying
+   - Pending orders (all types) detection and copying
+   - Symbol selection for market data access
+   - Volume scaling with configurable ratios
 
-3. **Configuration System**
-   - INI-based configuration for multiple accounts
-   - Command-line argument support
+3. **Robust Error Handling**
+   - AutoTrading detection with clear instructions
+   - Connection failure recovery
+   - Process lifecycle management
+   - Graceful shutdown with cleanup
+
+4. **Configuration System**
+   - INI-based configuration with master/slave role definitions
+   - Copy trading settings (enabled/disabled, check intervals)
+   - Command-line argument support with copy trading options
    - Backward compatibility with single account mode
-   - Flexible server name mapping
 
-4. **Logging & Monitoring**
-   - Comprehensive logging system with connection IDs
+5. **Logging & Monitoring**
+   - Comprehensive logging system with connection IDs and roles
    - Real-time account balance monitoring
-   - Connection status tracking for all accounts
+   - Copy trading status and engine monitoring
+   - Deal processing tracking and duplicate prevention
 
 ### 🚧 In Progress
 
-1. **Copy Trading Engine**
-   - Trade monitoring and replication between accounts
-   - Position management across multiple accounts
-   - Risk management rules
+1. **Trade Execution Logic**
+   - Actual trade replication implementation (currently logs only)
+   - Order type conversion and execution
+   - Volume scaling based on account sizes
 
 ### 📋 Planned Features
 
 1. **Advanced Copy Trading**
-   - Master-slave account designation
-   - Proportional scaling based on account size
-   - Selective trade copying with filters
+   - Proportional scaling based on account balance ratios
+   - Selective trade copying with symbol filters
+   - Risk management rules (max trades, drawdown limits)
+   - Stop-loss and take-profit copying
 
-2. **Advanced Risk Management**
-   - Stop-loss and take-profit rules
-   - Maximum drawdown limits per account
-   - Position sizing algorithms
+2. **Enhanced Trade Management**
+   - Position modification copying (SL/TP changes)
+   - Partial close operations
+   - Order management (pending orders, modifications)
 
-3. **Web Interface**
-   - Real-time monitoring dashboard for all accounts
-   - Configuration management
-   - Trade history and analytics
+3. **Monitoring & Analytics**
+   - Real-time monitoring dashboard
+   - Trade performance analytics
+   - Account synchronization status
+   - Historical copy trading statistics
 
-4. **Notifications**
-   - Email/SMS alerts for all accounts
+4. **Notifications & Alerts**
+   - Email/SMS alerts for copy trading events
    - Trade execution notifications
-   - Error and status updates
+   - Error and connection status updates
+   - Performance reports
 
 ## Troubleshooting
 

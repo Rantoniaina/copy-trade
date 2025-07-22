@@ -8,28 +8,56 @@ server = FundedNext-Server 2
 # Trading platform (currently only MT5 is supported)
 platform = MT5
 
-# Multiple accounts configuration
+# Copy trading configuration
+[CopyTrade]
+# Enable copy trading functionality
+enabled = true
+
+# Time interval between trade checks (in seconds)
+check_interval = 1.0
+
+# Multiple accounts configuration with master/slave roles
 # Each account should have a unique identifier (account1, account2, etc.)
 # All accounts will use the same broker and server specified above
+# 
+# IMPORTANT: You must have exactly ONE master account and at least ONE slave account
+# for copy trading to work properly.
 
 [Account1]
-# Account number for the first account
+# Account number for the master account
 account = 
 
-# Password for the first account
+# Password for the master account
 # password = 
+
+# Role: "master" or "slave" (only one master allowed)
+role = master
 
 [Account2]
-# Account number for the second account
+# Account number for the first slave account
 account = 
 
-# Password for the second account
+# Password for the first slave account
 # password = 
 
-# Add more accounts as needed by creating additional sections
-# [Account3]
+# Role: "master" or "slave"
+role = slave
+
+[Account3]
+# Account number for the second slave account
+account = 
+
+# Password for the second slave account
+# password = 
+
+# Role: "master" or "slave"
+role = slave
+
+# Add more slave accounts as needed by creating additional sections
+# [Account4]
 # account = 
 # password = 
+# role = slave
 
 [Logging]
 # Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
