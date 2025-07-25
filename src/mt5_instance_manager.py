@@ -14,14 +14,37 @@ logger = logging.getLogger(__name__)
 class MT5InstanceManager:
     """Manages multiple MT5 installations for copy trading."""
     
-    def __init__(self):
-        """Initialize the MT5 instance manager."""
+    def __init__(self, config_paths: Dict[str, str] = None):
+        """
+        Initialize the MT5 instance manager.
+        
+        Args:
+            config_paths: Dictionary containing MetaTrader paths from configuration:
+                - 'original_path': Original MT5 installation directory
+                - 'master_path': Master account instance directory
+                - 'slaves_base_path': Base directory for slave instances
+                - 'slave_account{N}_path': Individual slave paths (optional)
+        """
         self.base_mt5_path = None
+        self.config_paths = config_paths or {}
         self.instances = {}  # role -> path mapping
         self._discover_mt5_installation()
     
     def _discover_mt5_installation(self) -> None:
-        """Discover the base MT5 installation path."""
+        """Discover the base MT5 installation path using config or auto-discovery."""
+        # First, try to use the configured original path
+        if self.config_paths.get('original_path'):
+            configured_path = self.config_paths['original_path']
+            logger.info(f"Using configured MT5 original path: {configured_path}")
+            if self._is_valid_mt5_installation(configured_path):
+                self.base_mt5_path = configured_path
+                logger.info(f"Configured MT5 installation validated: {configured_path}")
+                return
+            else:
+                logger.warning(f"Configured MT5 path is not valid, falling back to auto-discovery: {configured_path}")
+        
+        # Fallback to auto-discovery if no config path or config path is invalid
+        logger.info("Auto-discovering MT5 installation...")
         common_paths = [
             r"C:\Program Files\MetaTrader 5",
             r"C:\Program Files (x86)\MetaTrader 5",
@@ -135,41 +158,74 @@ class MT5InstanceManager:
         if not self.base_mt5_path:
             raise RuntimeError("No base MT5 installation found. Please install MT5 first.")
         
-        # Scan existing instances
-        existing = self._scan_existing_instances()
         instances = {}
         
-        # Ensure master instances
+        # Handle master instances using configured paths
         for i in range(master_count):
             role = "master" if master_count == 1 else f"master{i+1}"
             
-            if role in existing:
-                instances[role] = existing[role]
-                logger.info(f"Using existing {role} instance: {existing[role]}")
-            else:
-                # Create new instance
-                path = self._create_instance(role, "master")
-                if path:
-                    instances[role] = path
-                    logger.info(f"Created new {role} instance: {path}")
+            # Use configured master path if available
+            if self.config_paths.get('master_path'):
+                master_path = self.config_paths['master_path']
+                if self._ensure_directory_exists(master_path):
+                    instances[role] = master_path
+                    logger.info(f"Using configured {role} path: {master_path}")
                 else:
-                    logger.error(f"Failed to create {role} instance")
+                    logger.error(f"Failed to create configured {role} directory: {master_path}")
+            else:
+                # Fallback to old behavior if no config path
+                existing = self._scan_existing_instances()
+                if role in existing:
+                    instances[role] = existing[role]
+                    logger.info(f"Using existing {role} instance: {existing[role]}")
+                else:
+                    # Create new instance using old method
+                    path = self._create_instance(role, "master")
+                    if path:
+                        instances[role] = path
+                        logger.info(f"Created new {role} instance: {path}")
+                    else:
+                        logger.error(f"Failed to create {role} instance")
         
-        # Ensure slave instances
+        # Handle slave instances using configured paths
         for i in range(slave_count):
             role = "slave" if slave_count == 1 else f"slave{i+1}"
+            account_num = i + 2  # Account2, Account3, etc. (Account1 is master)
             
-            if role in existing:
-                instances[role] = existing[role]
-                logger.info(f"Using existing {role} instance: {existing[role]}")
-            else:
-                # Create new instance
-                path = self._create_instance(role, "slave")
-                if path:
-                    instances[role] = path
-                    logger.info(f"Created new {role} instance: {path}")
+            # Check for individual slave path first
+            individual_slave_key = f"slave_account{account_num}_path"
+            if self.config_paths.get(individual_slave_key):
+                slave_path = self.config_paths[individual_slave_key]
+                if self._ensure_directory_exists(slave_path):
+                    instances[role] = slave_path
+                    logger.info(f"Using configured individual {role} path: {slave_path}")
                 else:
-                    logger.error(f"Failed to create {role} instance")
+                    logger.error(f"Failed to create configured {role} directory: {slave_path}")
+                continue
+            
+            # Use base slaves path if available
+            if self.config_paths.get('slaves_base_path'):
+                slaves_base = self.config_paths['slaves_base_path']
+                slave_path = os.path.join(slaves_base, f"Account{account_num}")
+                if self._ensure_directory_exists(slave_path):
+                    instances[role] = slave_path
+                    logger.info(f"Using configured {role} path under base: {slave_path}")
+                else:
+                    logger.error(f"Failed to create {role} directory under base: {slave_path}")
+            else:
+                # Fallback to old behavior if no config path
+                existing = self._scan_existing_instances()
+                if role in existing:
+                    instances[role] = existing[role]
+                    logger.info(f"Using existing {role} instance: {existing[role]}")
+                else:
+                    # Create new instance using old method
+                    path = self._create_instance(role, "slave")
+                    if path:
+                        instances[role] = path
+                        logger.info(f"Created new {role} instance: {path}")
+                    else:
+                        logger.error(f"Failed to create {role} instance")
         
         self.instances = instances
         return instances
@@ -210,6 +266,25 @@ class MT5InstanceManager:
         except Exception as e:
             logger.error(f"❌ Failed to create {role} MT5 data directory: {e}")
             return None
+    
+    def _ensure_directory_exists(self, path: str) -> bool:
+        """
+        Ensure that a directory exists, creating it if necessary.
+        
+        Args:
+            path: Directory path to ensure exists
+            
+        Returns:
+            True if directory exists or was created successfully, False otherwise
+        """
+        try:
+            if not os.path.exists(path):
+                os.makedirs(path, exist_ok=True)
+                logger.info(f"Created directory: {path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to create directory {path}: {e}")
+            return False
     
     def get_instance_path(self, role: str) -> Optional[str]:
         """Get the path for a specific role."""
@@ -268,41 +343,51 @@ class MT5InstanceManager:
 _instance_manager = None
 
 
-def get_mt5_instance_manager() -> MT5InstanceManager:
-    """Get the global MT5 instance manager."""
+def get_mt5_instance_manager(config_paths: Dict[str, str] = None) -> MT5InstanceManager:
+    """
+    Get the global MT5 instance manager.
+    
+    Args:
+        config_paths: Configuration paths for MetaTrader instances
+        
+    Returns:
+        MT5InstanceManager instance
+    """
     global _instance_manager
     if _instance_manager is None:
-        _instance_manager = MT5InstanceManager()
+        _instance_manager = MT5InstanceManager(config_paths)
     return _instance_manager
 
 
-def auto_setup_mt5_instances(master_count: int = 1, slave_count: int = 1) -> Dict[str, str]:
+def auto_setup_mt5_instances(master_count: int = 1, slave_count: int = 1, config_paths: Dict[str, str] = None) -> Dict[str, str]:
     """
     Automatically set up MT5 instances for copy trading.
     
     Args:
         master_count: Number of master accounts
         slave_count: Number of slave accounts
+        config_paths: Configuration paths for MetaTrader instances
         
     Returns:
         Dictionary mapping roles to MT5 paths
     """
-    manager = get_mt5_instance_manager()
+    manager = get_mt5_instance_manager(config_paths)
     return manager.ensure_instances(master_count, slave_count)
 
 
-def get_mt5_path_for_role(role: str, account_index: int = 1) -> Optional[str]:
+def get_mt5_path_for_role(role: str, account_index: int = 1, config_paths: Dict[str, str] = None) -> Optional[str]:
     """
     Get MT5 path for a specific role.
     
     Args:
         role: "master" or "slave"
         account_index: Index for multiple accounts of same role
+        config_paths: Configuration paths for MetaTrader instances
         
     Returns:
         Path to MT5 installation or None
     """
-    manager = get_mt5_instance_manager()
+    manager = get_mt5_instance_manager(config_paths)
     
     if role.lower() == "master":
         if account_index == 1:

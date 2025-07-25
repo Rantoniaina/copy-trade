@@ -53,6 +53,46 @@ def load_config(config_path):
         return None
 
 
+def parse_metatrader_config(config):
+    """
+    Parse MetaTrader configuration section from config file.
+    
+    Args:
+        config: ConfigParser object
+        
+    Returns:
+        Dictionary containing MetaTrader paths configuration
+    """
+    metatrader_paths = {}
+    
+    if 'MetaTrader' in config:
+        mt_config = config['MetaTrader']
+        
+        # Get original MT5 installation path
+        if mt_config.get('original_path', '').strip():
+            metatrader_paths['original_path'] = mt_config['original_path'].strip()
+            logger.info(f"Configured original MT5 path: {metatrader_paths['original_path']}")
+        
+        # Get master path
+        if mt_config.get('master_path', '').strip():
+            metatrader_paths['master_path'] = mt_config['master_path'].strip()
+            logger.info(f"Configured master MT5 path: {metatrader_paths['master_path']}")
+        
+        # Get slaves base path
+        if mt_config.get('slaves_base_path', '').strip():
+            metatrader_paths['slaves_base_path'] = mt_config['slaves_base_path'].strip()
+            logger.info(f"Configured slaves base path: {metatrader_paths['slaves_base_path']}")
+        
+        # Get individual slave paths (slave_account2_path, slave_account3_path, etc.)
+        for key in mt_config:
+            if key.startswith('slave_account') and key.endswith('_path'):
+                if mt_config.get(key, '').strip():
+                    metatrader_paths[key] = mt_config[key].strip()
+                    logger.info(f"Configured individual slave path {key}: {metatrader_paths[key]}")
+    
+    return metatrader_paths
+
+
 def load_accounts_from_config(config):
     """
     Load account configurations from config file.
@@ -124,14 +164,16 @@ def load_accounts_from_config(config):
     return master_account, slave_accounts
 
 
-def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = True) -> Dict[str, str]:
+def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = True, config_paths: Dict[str, str] = None) -> Dict[str, str]:
     """Setup MT5 instances automatically if enabled."""
     mt5_paths = {}
     
     if auto_setup:
         try:
             logger.info("🔧 Setting up MT5 instances automatically...")
-            mt5_paths = auto_setup_mt5_instances(master_count, slave_count)
+            if config_paths:
+                logger.info("Using MetaTrader configuration paths from config file")
+            mt5_paths = auto_setup_mt5_instances(master_count, slave_count, config_paths)
             
             if mt5_paths:
                 logger.info("✅ MT5 instances ready:")
@@ -149,28 +191,56 @@ def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = 
     return mt5_paths
 
 
-def assign_mt5_paths(master_account: Dict, slave_accounts: List[Dict], mt5_paths: Dict[str, str]) -> None:
-    """Assign MT5 paths to accounts if not already specified."""
+def assign_mt5_paths(master_account: Dict, slave_accounts: List[Dict], mt5_paths: Dict[str, str], config_paths: Dict[str, str] = None) -> None:
+    """
+    Assign MT5 paths to accounts if not already specified.
+    
+    Args:
+        master_account: Master account configuration
+        slave_accounts: List of slave account configurations
+        mt5_paths: Dictionary of instance paths from MT5 manager
+        config_paths: MetaTrader configuration paths from config file
+    """
     
     # Assign master path if not specified
-    if not master_account.get('mt5_path') and mt5_paths:
-        master_path = mt5_paths.get('master') or mt5_paths.get('master1')
-        if master_path:
-            master_account['mt5_path'] = master_path
-            logger.info(f"Assigned master MT5 path: {master_path}")
+    if not master_account.get('mt5_path'):
+        # Try configured master path first
+        if config_paths and config_paths.get('master_path'):
+            master_account['mt5_path'] = config_paths['master_path']
+            logger.info(f"Assigned configured master MT5 path: {config_paths['master_path']}")
+        # Fallback to auto-generated paths
+        elif mt5_paths:
+            master_path = mt5_paths.get('master') or mt5_paths.get('master1')
+            if master_path:
+                master_account['mt5_path'] = master_path
+                logger.info(f"Assigned auto-generated master MT5 path: {master_path}")
     
     # Assign slave paths if not specified
     slave_index = 1
     for slave in slave_accounts:
-        if not slave.get('mt5_path') and mt5_paths:
-            if len(slave_accounts) == 1:
-                slave_path = mt5_paths.get('slave') or mt5_paths.get('slave1')
-            else:
-                slave_path = mt5_paths.get(f'slave{slave_index}') or mt5_paths.get('slave')
+        if not slave.get('mt5_path'):
+            account_num = slave_index + 1  # Account2, Account3, etc.
+            individual_slave_key = f"slave_account{account_num}_path"
             
-            if slave_path:
+            # Try individual configured slave path first
+            if config_paths and config_paths.get(individual_slave_key):
+                slave['mt5_path'] = config_paths[individual_slave_key]
+                logger.info(f"Assigned configured individual slave {slave_index} MT5 path: {config_paths[individual_slave_key]}")
+            # Try base slaves path with account directory
+            elif config_paths and config_paths.get('slaves_base_path'):
+                slave_path = os.path.join(config_paths['slaves_base_path'], f"Account{account_num}")
                 slave['mt5_path'] = slave_path
-                logger.info(f"Assigned slave {slave_index} MT5 path: {slave_path}")
+                logger.info(f"Assigned configured base slave {slave_index} MT5 path: {slave_path}")
+            # Fallback to auto-generated paths
+            elif mt5_paths:
+                if len(slave_accounts) == 1:
+                    slave_path = mt5_paths.get('slave') or mt5_paths.get('slave1')
+                else:
+                    slave_path = mt5_paths.get(f'slave{slave_index}') or mt5_paths.get('slave')
+                
+                if slave_path:
+                    slave['mt5_path'] = slave_path
+                    logger.info(f"Assigned auto-generated slave {slave_index} MT5 path: {slave_path}")
         
         slave_index += 1
 
@@ -206,6 +276,9 @@ def main():
         copy_config = config['CopyTrade']
         check_interval = copy_config.getfloat('check_interval', 1.0)
     
+    # Parse MetaTrader configuration paths
+    metatrader_paths = parse_metatrader_config(config)
+    
     # Load accounts
     master_account, slave_accounts = load_accounts_from_config(config)
     
@@ -223,11 +296,12 @@ def main():
     mt5_paths = setup_mt5_instances(
         master_count=1, 
         slave_count=len(slave_accounts), 
-        auto_setup=args.auto_setup_mt5
+        auto_setup=args.auto_setup_mt5,
+        config_paths=metatrader_paths # Pass parsed paths to setup_mt5_instances
     )
     
     # Assign MT5 paths to accounts
-    assign_mt5_paths(master_account, slave_accounts, mt5_paths)
+    assign_mt5_paths(master_account, slave_accounts, mt5_paths, metatrader_paths)
     
     # Create orchestrator
     orchestrator = CopyTradingOrchestrator(signal_broker_type=args.signal_broker)

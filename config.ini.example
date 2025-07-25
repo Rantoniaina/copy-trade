@@ -16,6 +16,28 @@ enabled = true
 # Time interval between trade checks (in seconds)
 check_interval = 1.0
 
+# MetaTrader installation and instance configuration
+[MetaTrader]
+# Original MetaTrader 5 installation directory
+# This is the main installation folder where MT5 is installed
+original_path = C:\Program Files\MetaTrader 5
+
+# Master account MetaTrader instance directory
+# This should be a separate folder for the master account instance
+# Example: C:\MT5_Master or a subfolder in your trading setup
+master_path = C:\MT5_Master
+
+# Base directory for slave account MetaTrader instances
+# Each slave will create a subdirectory under this path
+# Example: C:\MT5_Slaves will create C:\MT5_Slaves\Account2, C:\MT5_Slaves\Account3, etc.
+slaves_base_path = C:\MT5_Slaves
+
+# Alternative: Specify individual slave paths (uncomment and modify as needed)
+# If you prefer to specify exact paths for each slave account, use these options
+# slave_account2_path = C:\MT5_Slave_Account2
+# slave_account3_path = C:\MT5_Slave_Account3
+# Add more slave paths as needed for additional accounts
+
 # Multiple accounts configuration with master/slave roles
 # Each account should have a unique identifier (account1, account2, etc.)
 # All accounts will use the same broker and server specified above
