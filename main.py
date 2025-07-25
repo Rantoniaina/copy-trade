@@ -13,7 +13,8 @@ from getpass import getpass
 from typing import Dict, List
 
 from src.multiprocess_copy_trading import CopyTradingOrchestrator
-from src.mt5_instance_manager import auto_setup_mt5_instances, get_mt5_path_for_role
+from src.mt5_instance_manager import auto_setup_mt5_instances, get_mt5_path_for_role, get_mt5_instance_manager
+from src.mt5_instance_database import get_mt5_database
 
 # Configure logging
 logging.basicConfig(
@@ -34,6 +35,12 @@ def parse_args():
                        help="Automatically setup MT5 instances (default: true)")
     parser.add_argument("--no-auto-setup-mt5", dest="auto_setup_mt5", action="store_false",
                        help="Disable automatic MT5 instance setup")
+    parser.add_argument("--db-stats", action="store_true",
+                       help="Show MT5 instance database statistics and exit")
+    parser.add_argument("--db-cleanup", action="store_true",
+                       help="Clean up missing MT5 instances from database and exit")
+    parser.add_argument("--list-instances", action="store_true",
+                       help="List all tracked MT5 instances and exit")
     
     return parser.parse_args()
 
@@ -191,6 +198,66 @@ def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = 
     return mt5_paths
 
 
+def show_database_stats():
+    """Show MT5 instance database statistics."""
+    db = get_mt5_database()
+    stats = db.get_database_stats()
+    
+    print("🗄️ MT5 Instance Database Statistics:")
+    print(f"   Database file: {stats.get('database_path', 'Unknown')}")
+    print(f"   Total instances: {stats.get('total_instances', 0)}")
+    print(f"   Active instances: {stats.get('active_instances', 0)}")
+    print(f"   Inactive instances: {stats.get('inactive_instances', 0)}")
+    
+    role_counts = stats.get('role_counts', {})
+    if role_counts:
+        print("   Instances by role:")
+        for role, count in role_counts.items():
+            print(f"     {role}: {count}")
+    else:
+        print("   No active instances found")
+
+
+def cleanup_database():
+    """Clean up missing MT5 instances from database."""
+    print("🧹 Cleaning up missing MT5 instances from database...")
+    
+    db = get_mt5_database()
+    removed_count = db.cleanup_missing_instances()
+    
+    if removed_count > 0:
+        print(f"✅ Removed {removed_count} missing instances from database")
+    else:
+        print("✅ No missing instances found - database is clean")
+
+
+def list_tracked_instances():
+    """List all tracked MT5 instances."""
+    db = get_mt5_database()
+    instances = db.get_all_instances(active_only=False)
+    
+    if not instances:
+        print("📝 No MT5 instances tracked in database")
+        return
+    
+    print(f"📝 Tracked MT5 Instances ({len(instances)} total):")
+    print()
+    
+    for instance in instances:
+        status = "🟢 Active" if instance['is_active'] else "🔴 Inactive"
+        print(f"   {status} - {instance['role']}")
+        print(f"     Path: {instance['instance_path']}")
+        if instance['account_number']:
+            print(f"     Account: {instance['account_number']}")
+        if instance['broker']:
+            print(f"     Broker: {instance['broker']}")
+        if instance['description']:
+            print(f"     Description: {instance['description']}")
+        print(f"     Created: {instance['created_at']}")
+        print(f"     Last used: {instance['last_used']}")
+        print()
+
+
 def assign_mt5_paths(master_account: Dict, slave_accounts: List[Dict], mt5_paths: Dict[str, str], config_paths: Dict[str, str] = None) -> None:
     """
     Assign MT5 paths to accounts if not already specified.
@@ -252,6 +319,19 @@ def main():
     # Set logging level
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
+    
+    # Handle database management commands
+    if args.db_stats:
+        show_database_stats()
+        return 0
+    
+    if args.db_cleanup:
+        cleanup_database()
+        return 0
+    
+    if args.list_instances:
+        list_tracked_instances()
+        return 0
     
     logger.info("🚀 STARTING MULTI-PROCESS COPY TRADING SYSTEM with AUTO MT5 SETUP")
     

@@ -8,6 +8,8 @@ import logging
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 
+from .mt5_instance_database import get_mt5_database
+
 logger = logging.getLogger(__name__)
 
 
@@ -159,16 +161,27 @@ class MT5InstanceManager:
             raise RuntimeError("No base MT5 installation found. Please install MT5 first.")
         
         instances = {}
+        db = get_mt5_database()
         
         # Handle master instances using configured paths
         for i in range(master_count):
             role = "master" if master_count == 1 else f"master{i+1}"
+            
+            # Check database for existing instance first
+            existing_instance = db.get_instance(role)
+            if existing_instance and os.path.exists(existing_instance['instance_path']):
+                instances[role] = existing_instance['instance_path']
+                db.update_last_used(existing_instance['instance_path'])
+                logger.info(f"Using existing {role} instance from database: {existing_instance['instance_path']}")
+                continue
             
             # Use configured master path if available
             if self.config_paths.get('master_path'):
                 master_path = self.config_paths['master_path']
                 if self._ensure_directory_exists(master_path):
                     instances[role] = master_path
+                    # Track in database
+                    db.add_instance(role, master_path, description="Configured master path")
                     logger.info(f"Using configured {role} path: {master_path}")
                 else:
                     logger.error(f"Failed to create configured {role} directory: {master_path}")
@@ -177,12 +190,16 @@ class MT5InstanceManager:
                 existing = self._scan_existing_instances()
                 if role in existing:
                     instances[role] = existing[role]
+                    # Track in database
+                    db.add_instance(role, existing[role], description="Auto-discovered instance")
                     logger.info(f"Using existing {role} instance: {existing[role]}")
                 else:
                     # Create new instance using old method
                     path = self._create_instance(role, "master")
                     if path:
                         instances[role] = path
+                        # Track in database
+                        db.add_instance(role, path, description="Auto-created master instance")
                         logger.info(f"Created new {role} instance: {path}")
                     else:
                         logger.error(f"Failed to create {role} instance")
@@ -192,12 +209,22 @@ class MT5InstanceManager:
             role = "slave" if slave_count == 1 else f"slave{i+1}"
             account_num = i + 2  # Account2, Account3, etc. (Account1 is master)
             
+            # Check database for existing instance first
+            existing_instance = db.get_instance(role)
+            if existing_instance and os.path.exists(existing_instance['instance_path']):
+                instances[role] = existing_instance['instance_path']
+                db.update_last_used(existing_instance['instance_path'])
+                logger.info(f"Using existing {role} instance from database: {existing_instance['instance_path']}")
+                continue
+            
             # Check for individual slave path first
             individual_slave_key = f"slave_account{account_num}_path"
             if self.config_paths.get(individual_slave_key):
                 slave_path = self.config_paths[individual_slave_key]
                 if self._ensure_directory_exists(slave_path):
                     instances[role] = slave_path
+                    # Track in database
+                    db.add_instance(role, slave_path, description=f"Configured individual slave path for account {account_num}")
                     logger.info(f"Using configured individual {role} path: {slave_path}")
                 else:
                     logger.error(f"Failed to create configured {role} directory: {slave_path}")
@@ -209,6 +236,8 @@ class MT5InstanceManager:
                 slave_path = os.path.join(slaves_base, f"Account{account_num}")
                 if self._ensure_directory_exists(slave_path):
                     instances[role] = slave_path
+                    # Track in database
+                    db.add_instance(role, slave_path, description=f"Configured base slave path for account {account_num}")
                     logger.info(f"Using configured {role} path under base: {slave_path}")
                 else:
                     logger.error(f"Failed to create {role} directory under base: {slave_path}")
@@ -217,17 +246,26 @@ class MT5InstanceManager:
                 existing = self._scan_existing_instances()
                 if role in existing:
                     instances[role] = existing[role]
+                    # Track in database
+                    db.add_instance(role, existing[role], description="Auto-discovered slave instance")
                     logger.info(f"Using existing {role} instance: {existing[role]}")
                 else:
                     # Create new instance using old method
                     path = self._create_instance(role, "slave")
                     if path:
                         instances[role] = path
+                        # Track in database
+                        db.add_instance(role, path, description="Auto-created slave instance")
                         logger.info(f"Created new {role} instance: {path}")
                     else:
                         logger.error(f"Failed to create {role} instance")
         
         self.instances = instances
+        
+        # Log database statistics
+        stats = db.get_database_stats()
+        logger.info(f"MT5 instance database: {stats.get('active_instances', 0)} active instances tracked")
+        
         return instances
     
     def _create_instance(self, role: str, role_type: str) -> Optional[str]:
@@ -337,6 +375,26 @@ class MT5InstanceManager:
                     shutil.rmtree(dir_path)
                 except Exception as e:
                     logger.warning(f"Failed to clean up {dir_path}: {e}")
+
+    def get_database_stats(self) -> Dict:
+        """Get database statistics."""
+        db = get_mt5_database()
+        return db.get_database_stats()
+    
+    def cleanup_missing_instances(self) -> int:
+        """Clean up instances from database that no longer exist on disk."""
+        db = get_mt5_database()
+        return db.cleanup_missing_instances()
+    
+    def get_tracked_instances(self, active_only: bool = True) -> List[Dict]:
+        """Get all tracked instances from the database."""
+        db = get_mt5_database()
+        return db.get_all_instances(active_only)
+    
+    def deactivate_instance(self, instance_path: str) -> bool:
+        """Mark an instance as inactive in the database."""
+        db = get_mt5_database()
+        return db.deactivate_instance(instance_path)
 
 
 # Global instance manager

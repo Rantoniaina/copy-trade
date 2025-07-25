@@ -132,6 +132,8 @@ dmypy.json
 config.ini
 logs/
 *.log
+mt5_instances.db
+mt5_instances.db-*
 
 # IDE
 .vscode/
