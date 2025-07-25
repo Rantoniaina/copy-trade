@@ -14,7 +14,7 @@ from typing import Dict, List
 
 from src.multiprocess_copy_trading import CopyTradingOrchestrator
 from src.mt5_instance_manager import auto_setup_mt5_instances, get_mt5_path_for_role, get_mt5_instance_manager
-from src.mt5_instance_database import get_mt5_database
+from src.mt5_instance_database import get_permanent_database, get_session_database
 
 # Configure logging
 logging.basicConfig(
@@ -41,6 +41,8 @@ def parse_args():
                        help="Clean up missing MT5 instances from database and exit")
     parser.add_argument("--list-instances", action="store_true",
                        help="List all tracked MT5 instances and exit")
+    parser.add_argument("--purge-session", action="store_true",
+                       help="Purge session database and exit")
     
     return parser.parse_args()
 
@@ -200,62 +202,99 @@ def setup_mt5_instances(master_count: int, slave_count: int, auto_setup: bool = 
 
 def show_database_stats():
     """Show MT5 instance database statistics."""
-    db = get_mt5_database()
-    stats = db.get_database_stats()
+    perm_db = get_permanent_database()
+    session_db = get_session_database()
+    
+    perm_stats = perm_db.get_stats()
+    session_assignments = session_db.get_all_assignments()
     
     print("🗄️ MT5 Instance Database Statistics:")
-    print(f"   Database file: {stats.get('database_path', 'Unknown')}")
-    print(f"   Total instances: {stats.get('total_instances', 0)}")
-    print(f"   Active instances: {stats.get('active_instances', 0)}")
-    print(f"   Inactive instances: {stats.get('inactive_instances', 0)}")
+    print()
+    print("📁 Permanent Database (Clone Paths):")
+    print(f"   Database file: {perm_stats.get('database_path', 'Unknown')}")
+    print(f"   Total clones: {perm_stats.get('total_clones', 0)}")
+    print(f"   Valid clones: {perm_stats.get('valid_clones', 0)}")
+    print(f"   Invalid clones: {perm_stats.get('invalid_clones', 0)}")
     
-    role_counts = stats.get('role_counts', {})
-    if role_counts:
-        print("   Instances by role:")
-        for role, count in role_counts.items():
-            print(f"     {role}: {count}")
+    print()
+    print("🎯 Session Database (Account Assignments):")
+    print(f"   Current assignments: {len(session_assignments)}")
+    
+    if session_assignments:
+        print("   Active assignments:")
+        for assignment in session_assignments:
+            print(f"     {assignment['role']} (Account {assignment['account_number']}) -> {assignment['instance_path']}")
     else:
-        print("   No active instances found")
+        print("   No active assignments")
 
 
 def cleanup_database():
-    """Clean up missing MT5 instances from database."""
-    print("🧹 Cleaning up missing MT5 instances from database...")
+    """Clean up missing MT5 instances from permanent database."""
+    print("🧹 Cleaning up missing MT5 clones from permanent database...")
     
-    db = get_mt5_database()
-    removed_count = db.cleanup_missing_instances()
+    perm_db = get_permanent_database()
+    clones = perm_db.get_all_clones(valid_only=False)
     
-    if removed_count > 0:
-        print(f"✅ Removed {removed_count} missing instances from database")
+    invalid_count = 0
+    for clone in clones:
+        if not perm_db.verify_clone_exists(clone['clone_path']):
+            invalid_count += 1
+    
+    if invalid_count > 0:
+        print(f"✅ Marked {invalid_count} missing clones as invalid in database")
     else:
-        print("✅ No missing instances found - database is clean")
+        print("✅ All tracked clones still exist - database is clean")
 
 
 def list_tracked_instances():
     """List all tracked MT5 instances."""
-    db = get_mt5_database()
-    instances = db.get_all_instances(active_only=False)
+    perm_db = get_permanent_database()
+    session_db = get_session_database()
     
-    if not instances:
-        print("📝 No MT5 instances tracked in database")
-        return
+    clones = perm_db.get_all_clones(valid_only=False)
+    assignments = session_db.get_all_assignments()
     
-    print(f"📝 Tracked MT5 Instances ({len(instances)} total):")
+    print(f"📝 Tracked MT5 Clones ({len(clones)} total):")
     print()
     
-    for instance in instances:
-        status = "🟢 Active" if instance['is_active'] else "🔴 Inactive"
-        print(f"   {status} - {instance['role']}")
-        print(f"     Path: {instance['instance_path']}")
-        if instance['account_number']:
-            print(f"     Account: {instance['account_number']}")
-        if instance['broker']:
-            print(f"     Broker: {instance['broker']}")
-        if instance['description']:
-            print(f"     Description: {instance['description']}")
-        print(f"     Created: {instance['created_at']}")
-        print(f"     Last used: {instance['last_used']}")
-        print()
+    if clones:
+        for clone in clones:
+            status = "🟢 Valid" if clone['is_valid'] else "🔴 Invalid"
+            print(f"   {status} - {clone['clone_path']}")
+            if clone['original_path']:
+                print(f"     Original: {clone['original_path']}")
+            if clone['description']:
+                print(f"     Description: {clone['description']}")
+            print(f"     Created: {clone['created_at']} ({clone['creation_method']})")
+            print(f"     Last verified: {clone['last_verified']}")
+            print()
+    else:
+        print("   No clones tracked in permanent database")
+    
+    print(f"🎯 Current Session Assignments ({len(assignments)} total):")
+    print()
+    
+    if assignments:
+        for assignment in assignments:
+            print(f"   🔗 {assignment['role']} (Account {assignment['account_number']})")
+            print(f"     Path: {assignment['instance_path']}")
+            if assignment['broker']:
+                print(f"     Broker: {assignment['broker']}")
+            print(f"     Assigned: {assignment['assigned_at']}")
+            print(f"     Last used: {assignment['last_used']}")
+            print()
+    else:
+        print("   No current assignments in session database")
+
+
+def purge_session_database():
+    """Purge the session database."""
+    print("🗑️ Purging session database...")
+    
+    session_db = get_session_database()
+    purged_count = session_db.purge_all()
+    
+    print(f"✅ Purged {purged_count} session records")
 
 
 def assign_mt5_paths(master_account: Dict, slave_accounts: List[Dict], mt5_paths: Dict[str, str], config_paths: Dict[str, str] = None) -> None:
@@ -333,7 +372,17 @@ def main():
         list_tracked_instances()
         return 0
     
+    if args.purge_session:
+        purge_session_database()
+        return 0
+    
     logger.info("🚀 STARTING MULTI-PROCESS COPY TRADING SYSTEM with AUTO MT5 SETUP")
+    
+    # Purge session database on startup (normal operation)
+    session_db = get_session_database()
+    purged_count = session_db.purge_all()
+    if purged_count > 0:
+        logger.info(f"🗑️ Purged {purged_count} previous session records")
     
     # Load configuration
     config = load_config(args.config)

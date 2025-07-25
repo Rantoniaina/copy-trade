@@ -1,6 +1,7 @@
 """
-MT5 Instance Database - Tracks all MT5 clone instances created by the copy trading system.
-Uses SQLite to store instance information persistently.
+MT5 Instance Database - Tracks MT5 clone instances with two separate databases:
+1. Permanent database: Stores all created MT5 clone paths (never deleted)
+2. Session database: Stores current account-path pairings (purged on startup)
 """
 import sqlite3
 import os
@@ -12,12 +13,12 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-class MT5InstanceDatabase:
-    """Database to track MT5 clone instances."""
+class MT5PermanentDatabase:
+    """Permanent database to track all MT5 clone paths ever created."""
     
     def __init__(self, db_path: str = None):
         """
-        Initialize the MT5 instance database.
+        Initialize the permanent MT5 clone database.
         
         Args:
             db_path: Path to the SQLite database file. If None, uses default path.
@@ -25,7 +26,7 @@ class MT5InstanceDatabase:
         if db_path is None:
             # Store database in project root, will be added to .gitignore
             project_root = Path(__file__).parent.parent
-            db_path = project_root / "mt5_instances.db"
+            db_path = project_root / "mt5_clones_permanent.db"
         
         self.db_path = str(db_path)
         self._init_database()
@@ -36,51 +37,44 @@ class MT5InstanceDatabase:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                # Create instances table
+                # Create clones table - stores all MT5 clone paths ever created
                 cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS mt5_instances (
+                    CREATE TABLE IF NOT EXISTS mt5_clones (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        role TEXT NOT NULL,
-                        account_number INTEGER,
-                        instance_path TEXT NOT NULL UNIQUE,
-                        data_path TEXT,
+                        clone_path TEXT NOT NULL UNIQUE,
+                        original_path TEXT,
                         created_at TEXT NOT NULL,
-                        last_used TEXT NOT NULL,
-                        is_active BOOLEAN DEFAULT 1,
-                        broker TEXT,
-                        description TEXT
+                        last_verified TEXT,
+                        is_valid BOOLEAN DEFAULT 1,
+                        description TEXT,
+                        creation_method TEXT
                     )
                 ''')
                 
                 # Create index for faster lookups
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_role ON mt5_instances(role)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_account ON mt5_instances(account_number)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_path ON mt5_instances(instance_path)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_clone_path ON mt5_clones(clone_path)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_valid ON mt5_clones(is_valid)')
                 
                 conn.commit()
-                logger.debug(f"Initialized MT5 instance database: {self.db_path}")
+                logger.debug(f"Initialized permanent MT5 clones database: {self.db_path}")
                 
         except sqlite3.Error as e:
-            logger.error(f"Failed to initialize database: {e}")
+            logger.error(f"Failed to initialize permanent database: {e}")
             raise
     
-    def add_instance(self, 
-                    role: str, 
-                    instance_path: str, 
-                    account_number: int = None,
-                    data_path: str = None,
-                    broker: str = None,
-                    description: str = None) -> bool:
+    def add_clone(self, 
+                  clone_path: str, 
+                  original_path: str = None,
+                  description: str = None,
+                  creation_method: str = None) -> bool:
         """
-        Add a new MT5 instance to the database.
+        Add a new MT5 clone path to the permanent database.
         
         Args:
-            role: Role of the instance (master, slave, slave1, etc.)
-            instance_path: Path to the MT5 instance
-            account_number: Account number associated with this instance
-            data_path: Path to the data directory (if different from instance_path)
-            broker: Broker name
+            clone_path: Path to the MT5 clone
+            original_path: Path to the original MT5 installation
             description: Optional description
+            creation_method: How the clone was created (config, auto, manual)
             
         Returns:
             True if added successfully, False otherwise
@@ -92,40 +86,252 @@ class MT5InstanceDatabase:
                 current_time = datetime.now().isoformat()
                 
                 cursor.execute('''
-                    INSERT OR REPLACE INTO mt5_instances 
-                    (role, account_number, instance_path, data_path, created_at, last_used, 
-                     is_active, broker, description)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
-                ''', (role, account_number, instance_path, data_path, current_time, 
-                      current_time, broker, description))
+                    INSERT OR REPLACE INTO mt5_clones 
+                    (clone_path, original_path, created_at, last_verified, is_valid, description, creation_method)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                ''', (clone_path, original_path, current_time, current_time, description, creation_method))
                 
                 conn.commit()
-                logger.info(f"Added MT5 instance to database: {role} -> {instance_path}")
+                logger.info(f"Added MT5 clone to permanent database: {clone_path}")
                 return True
                 
         except sqlite3.Error as e:
-            logger.error(f"Failed to add instance to database: {e}")
+            logger.error(f"Failed to add clone to permanent database: {e}")
             return False
     
-    def get_instance(self, role: str) -> Optional[Dict]:
+    def get_all_clones(self, valid_only: bool = True) -> List[Dict]:
         """
-        Get an MT5 instance by role.
+        Get all MT5 clone paths from the permanent database.
+        
+        Args:
+            valid_only: If True, only return valid clones
+            
+        Returns:
+            List of dictionaries with clone information
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                query = '''
+                    SELECT clone_path, original_path, created_at, last_verified, 
+                           is_valid, description, creation_method
+                    FROM mt5_clones
+                '''
+                params = []
+                
+                if valid_only:
+                    query += ' WHERE is_valid = 1'
+                
+                query += ' ORDER BY created_at DESC'
+                
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                
+                clones = []
+                for row in rows:
+                    clones.append({
+                        'clone_path': row[0],
+                        'original_path': row[1],
+                        'created_at': row[2],
+                        'last_verified': row[3],
+                        'is_valid': bool(row[4]),
+                        'description': row[5],
+                        'creation_method': row[6]
+                    })
+                
+                return clones
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get clones from permanent database: {e}")
+            return []
+    
+    def verify_clone_exists(self, clone_path: str) -> bool:
+        """
+        Verify that a clone path still exists on disk and update database.
+        
+        Args:
+            clone_path: Path to verify
+            
+        Returns:
+            True if clone exists, False otherwise
+        """
+        exists = os.path.exists(clone_path)
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                current_time = datetime.now().isoformat()
+                cursor.execute('''
+                    UPDATE mt5_clones 
+                    SET last_verified = ?, is_valid = ? 
+                    WHERE clone_path = ?
+                ''', (current_time, exists, clone_path))
+                
+                conn.commit()
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to update clone verification: {e}")
+        
+        return exists
+    
+    def get_stats(self) -> Dict:
+        """Get statistics about the permanent database."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('SELECT COUNT(*) FROM mt5_clones')
+                total_clones = cursor.fetchone()[0]
+                
+                cursor.execute('SELECT COUNT(*) FROM mt5_clones WHERE is_valid = 1')
+                valid_clones = cursor.fetchone()[0]
+                
+                return {
+                    'total_clones': total_clones,
+                    'valid_clones': valid_clones,
+                    'invalid_clones': total_clones - valid_clones,
+                    'database_path': self.db_path
+                }
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to get permanent database stats: {e}")
+            return {}
+
+
+class MT5SessionDatabase:
+    """Session database to track current account-path pairings (purged on startup)."""
+    
+    def __init__(self, db_path: str = None):
+        """
+        Initialize the session MT5 database.
+        
+        Args:
+            db_path: Path to the SQLite database file. If None, uses default path.
+        """
+        if db_path is None:
+            # Store database in project root, will be added to .gitignore
+            project_root = Path(__file__).parent.parent
+            db_path = project_root / "mt5_session.db"
+        
+        self.db_path = str(db_path)
+        self._init_database()
+    
+    def _init_database(self) -> None:
+        """Initialize the database and create tables if they don't exist."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Create session table - current account-path pairings
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS mt5_session (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        role TEXT NOT NULL,
+                        account_number INTEGER,
+                        instance_path TEXT NOT NULL,
+                        broker TEXT,
+                        assigned_at TEXT NOT NULL,
+                        last_used TEXT NOT NULL
+                    )
+                ''')
+                
+                # Create indexes
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_role ON mt5_session(role)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_account ON mt5_session(account_number)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_session_path ON mt5_session(instance_path)')
+                
+                conn.commit()
+                logger.debug(f"Initialized session MT5 database: {self.db_path}")
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to initialize session database: {e}")
+            raise
+    
+    def purge_all(self) -> int:
+        """
+        Purge all session data (called on app startup).
+        
+        Returns:
+            Number of records purged
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('SELECT COUNT(*) FROM mt5_session')
+                count_before = cursor.fetchone()[0]
+                
+                cursor.execute('DELETE FROM mt5_session')
+                conn.commit()
+                
+                logger.info(f"Purged {count_before} session records on startup")
+                return count_before
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to purge session database: {e}")
+            return 0
+    
+    def assign_account_to_path(self, 
+                              role: str, 
+                              account_number: int, 
+                              instance_path: str,
+                              broker: str = None) -> bool:
+        """
+        Assign an account to a specific MT5 instance path.
+        
+        Args:
+            role: Role (master, slave, slave1, etc.)
+            account_number: Account number
+            instance_path: Path to MT5 instance
+            broker: Broker name
+            
+        Returns:
+            True if assigned successfully, False otherwise
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                current_time = datetime.now().isoformat()
+                
+                # Remove any existing assignment for this role/account
+                cursor.execute('DELETE FROM mt5_session WHERE role = ? OR account_number = ?', 
+                             (role, account_number))
+                
+                # Add new assignment
+                cursor.execute('''
+                    INSERT INTO mt5_session 
+                    (role, account_number, instance_path, broker, assigned_at, last_used)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (role, account_number, instance_path, broker, current_time, current_time))
+                
+                conn.commit()
+                logger.info(f"Assigned account {account_number} ({role}) to path: {instance_path}")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Failed to assign account to path: {e}")
+            return False
+    
+    def get_assignment(self, role: str) -> Optional[Dict]:
+        """
+        Get the current assignment for a role.
         
         Args:
             role: Role to search for
             
         Returns:
-            Dictionary with instance information or None if not found
+            Dictionary with assignment information or None if not found
         """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT role, account_number, instance_path, data_path, created_at, 
-                           last_used, is_active, broker, description
-                    FROM mt5_instances 
-                    WHERE role = ? AND is_active = 1
-                    ORDER BY last_used DESC
+                    SELECT role, account_number, instance_path, broker, assigned_at, last_used
+                    FROM mt5_session 
+                    WHERE role = ?
                     LIMIT 1
                 ''', (role,))
                 
@@ -135,88 +341,57 @@ class MT5InstanceDatabase:
                         'role': row[0],
                         'account_number': row[1],
                         'instance_path': row[2],
-                        'data_path': row[3],
-                        'created_at': row[4],
-                        'last_used': row[5],
-                        'is_active': bool(row[6]),
-                        'broker': row[7],
-                        'description': row[8]
+                        'broker': row[3],
+                        'assigned_at': row[4],
+                        'last_used': row[5]
                     }
                 return None
                 
         except sqlite3.Error as e:
-            logger.error(f"Failed to get instance from database: {e}")
+            logger.error(f"Failed to get assignment from session database: {e}")
             return None
     
-    def get_all_instances(self, active_only: bool = True) -> List[Dict]:
-        """
-        Get all MT5 instances from the database.
-        
-        Args:
-            active_only: If True, only return active instances
-            
-        Returns:
-            List of dictionaries with instance information
-        """
+    def get_all_assignments(self) -> List[Dict]:
+        """Get all current assignments."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT role, account_number, instance_path, broker, assigned_at, last_used
+                    FROM mt5_session 
+                    ORDER BY assigned_at DESC
+                ''')
                 
-                query = '''
-                    SELECT role, account_number, instance_path, data_path, created_at, 
-                           last_used, is_active, broker, description
-                    FROM mt5_instances
-                '''
-                params = []
-                
-                if active_only:
-                    query += ' WHERE is_active = 1'
-                
-                query += ' ORDER BY created_at DESC'
-                
-                cursor.execute(query, params)
                 rows = cursor.fetchall()
-                
-                instances = []
+                assignments = []
                 for row in rows:
-                    instances.append({
+                    assignments.append({
                         'role': row[0],
                         'account_number': row[1],
                         'instance_path': row[2],
-                        'data_path': row[3],
-                        'created_at': row[4],
-                        'last_used': row[5],
-                        'is_active': bool(row[6]),
-                        'broker': row[7],
-                        'description': row[8]
+                        'broker': row[3],
+                        'assigned_at': row[4],
+                        'last_used': row[5]
                     })
                 
-                return instances
+                return assignments
                 
         except sqlite3.Error as e:
-            logger.error(f"Failed to get instances from database: {e}")
+            logger.error(f"Failed to get assignments from session database: {e}")
             return []
     
-    def update_last_used(self, instance_path: str) -> bool:
-        """
-        Update the last used timestamp for an instance.
-        
-        Args:
-            instance_path: Path to the instance
-            
-        Returns:
-            True if updated successfully, False otherwise
-        """
+    def update_last_used(self, role: str) -> bool:
+        """Update the last used timestamp for a role."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
                 current_time = datetime.now().isoformat()
                 cursor.execute('''
-                    UPDATE mt5_instances 
+                    UPDATE mt5_session 
                     SET last_used = ? 
-                    WHERE instance_path = ?
-                ''', (current_time, instance_path))
+                    WHERE role = ?
+                ''', (current_time, role))
                 
                 conn.commit()
                 return cursor.rowcount > 0
@@ -224,177 +399,30 @@ class MT5InstanceDatabase:
         except sqlite3.Error as e:
             logger.error(f"Failed to update last used time: {e}")
             return False
-    
-    def deactivate_instance(self, instance_path: str) -> bool:
-        """
-        Mark an instance as inactive (soft delete).
-        
-        Args:
-            instance_path: Path to the instance
-            
-        Returns:
-            True if deactivated successfully, False otherwise
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    UPDATE mt5_instances 
-                    SET is_active = 0 
-                    WHERE instance_path = ?
-                ''', (instance_path,))
-                
-                conn.commit()
-                logger.info(f"Deactivated MT5 instance: {instance_path}")
-                return cursor.rowcount > 0
-                
-        except sqlite3.Error as e:
-            logger.error(f"Failed to deactivate instance: {e}")
-            return False
-    
-    def remove_instance(self, instance_path: str) -> bool:
-        """
-        Completely remove an instance from the database.
-        
-        Args:
-            instance_path: Path to the instance
-            
-        Returns:
-            True if removed successfully, False otherwise
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    DELETE FROM mt5_instances 
-                    WHERE instance_path = ?
-                ''', (instance_path,))
-                
-                conn.commit()
-                logger.info(f"Removed MT5 instance from database: {instance_path}")
-                return cursor.rowcount > 0
-                
-        except sqlite3.Error as e:
-            logger.error(f"Failed to remove instance: {e}")
-            return False
-    
-    def cleanup_missing_instances(self) -> int:
-        """
-        Remove instances from database where the path no longer exists.
-        
-        Returns:
-            Number of instances removed
-        """
-        removed_count = 0
-        
-        try:
-            instances = self.get_all_instances(active_only=False)
-            
-            for instance in instances:
-                instance_path = instance['instance_path']
-                if not os.path.exists(instance_path):
-                    if self.remove_instance(instance_path):
-                        removed_count += 1
-                        logger.info(f"Cleaned up missing instance: {instance_path}")
-            
-            logger.info(f"Cleanup completed: removed {removed_count} missing instances")
-            
-        except Exception as e:
-            logger.error(f"Failed to cleanup missing instances: {e}")
-        
-        return removed_count
-    
-    def get_instance_by_account(self, account_number: int) -> Optional[Dict]:
-        """
-        Get an MT5 instance by account number.
-        
-        Args:
-            account_number: Account number to search for
-            
-        Returns:
-            Dictionary with instance information or None if not found
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT role, account_number, instance_path, data_path, created_at, 
-                           last_used, is_active, broker, description
-                    FROM mt5_instances 
-                    WHERE account_number = ? AND is_active = 1
-                    ORDER BY last_used DESC
-                    LIMIT 1
-                ''', (account_number,))
-                
-                row = cursor.fetchone()
-                if row:
-                    return {
-                        'role': row[0],
-                        'account_number': row[1],
-                        'instance_path': row[2],
-                        'data_path': row[3],
-                        'created_at': row[4],
-                        'last_used': row[5],
-                        'is_active': bool(row[6]),
-                        'broker': row[7],
-                        'description': row[8]
-                    }
-                return None
-                
-        except sqlite3.Error as e:
-            logger.error(f"Failed to get instance by account: {e}")
-            return None
-    
-    def get_database_stats(self) -> Dict:
-        """
-        Get statistics about the database.
-        
-        Returns:
-            Dictionary with database statistics
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # Total instances
-                cursor.execute('SELECT COUNT(*) FROM mt5_instances')
-                total_instances = cursor.fetchone()[0]
-                
-                # Active instances
-                cursor.execute('SELECT COUNT(*) FROM mt5_instances WHERE is_active = 1')
-                active_instances = cursor.fetchone()[0]
-                
-                # Instances by role
-                cursor.execute('''
-                    SELECT role, COUNT(*) 
-                    FROM mt5_instances 
-                    WHERE is_active = 1 
-                    GROUP BY role
-                ''')
-                role_counts = dict(cursor.fetchall())
-                
-                return {
-                    'total_instances': total_instances,
-                    'active_instances': active_instances,
-                    'inactive_instances': total_instances - active_instances,
-                    'role_counts': role_counts,
-                    'database_path': self.db_path
-                }
-                
-        except sqlite3.Error as e:
-            logger.error(f"Failed to get database stats: {e}")
-            return {}
 
 
-# Global database instance
-_database = None
+# Global database instances
+_permanent_db = None
+_session_db = None
 
 
-def get_mt5_database() -> MT5InstanceDatabase:
-    """Get the global MT5 instance database."""
-    global _database
-    if _database is None:
-        _database = MT5InstanceDatabase()
-    return _database 
+def get_permanent_database() -> MT5PermanentDatabase:
+    """Get the global permanent MT5 database."""
+    global _permanent_db
+    if _permanent_db is None:
+        _permanent_db = MT5PermanentDatabase()
+    return _permanent_db
+
+
+def get_session_database() -> MT5SessionDatabase:
+    """Get the global session MT5 database."""
+    global _session_db
+    if _session_db is None:
+        _session_db = MT5SessionDatabase()
+    return _session_db
+
+
+# Backward compatibility - keep the old interface
+def get_mt5_database():
+    """Backward compatibility - returns session database."""
+    return get_session_database() 

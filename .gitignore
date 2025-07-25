@@ -132,8 +132,10 @@ dmypy.json
 config.ini
 logs/
 *.log
-mt5_instances.db
-mt5_instances.db-*
+mt5_clones_permanent.db
+mt5_clones_permanent.db-*
+mt5_session.db
+mt5_session.db-*
 
 # IDE
 .vscode/
